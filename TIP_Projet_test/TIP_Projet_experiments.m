@@ -23,9 +23,9 @@ maxMinutes    = 240;                 % plus aucun nouvel essai n'est lancé apr�
 % (run GPU du 07/11 : resnet18 224 px letterbox+augmentation -> F1 0,907 | frugalité 0,631)
 essaisDejaFaits = ["sqz_96" "sqz_128" "res18_96" "res18_128_base" "res18_128_letterbox" ...
                    "res18_128_aug" "res18_128_lr3e-4" "res18_224_lb_aug"];
-meilleureFrugaliteConnue = 0.6311;   % predictions_best.json n'est écrit que si un nouvel essai fait mieux
+meilleureFrugaliteConnue = 0.6311;   % référence affichée à la fin pour comparaison
 trainFraction = 1.0;                 % ex. 0.3 pour tester le script vite sur 30 % des images
-writePredictions = true;             % écrit predictions_best.json avec le meilleur modèle (frugalité)
+writePredictions = true;             % écrit un JSON unique par essai dans le dossier predictions/
 
 fprintf("GPU détecté : %d | paliers : %s | sortie : %s\n", hasGPU, mat2str(tiersToRun), outDir);
 
@@ -81,6 +81,7 @@ if trainFraction < 1
     imds = splitEachLabel(imds, trainFraction, "randomized");
 end
 [imdsTrain, imdsVal] = splitEachLabel(imds, 0.8, "randomized");
+imdsTest = imageDatastore(testDir);
 fprintf("%d images d'entraînement, %d de validation, %d classes\n", ...
     numel(imdsTrain.Files), numel(imdsVal.Files), numClasses);
 
@@ -185,6 +186,15 @@ for k = 1:numel(E)
         catch
         end
 
+        if writePredictions
+            try
+                YTest = scores2label(minibatchpredict(net, makeDS(imdsTest, c, false, false)), classNames);
+                savePredictions(baseDir, "bancessai_" + c.name, F1, frug, imdsTest.Files, YTest);
+            catch MEp
+                fprintf("(prédictions du test non écrites : %s)\n", MEp.message);
+            end
+        end
+
         if frug > bestFrug
             bestFrug = frug; bestNet = net; bestCfg = c;
             save(fullfile(outDir, "meilleur_modele.mat"), "bestNet", "bestCfg", "classNames", "-v7.3");
@@ -219,25 +229,12 @@ if any(startsWith(results.nom, "A_"))
 end
 fprintf("Temps total : %.1f min | fichiers dans %s\n", toc(tStart)/60, outDir);
 
-%% 5. Prédictions du test avec le meilleur modèle (fichier séparé de predictions.json)
+%% 5. Comparaison avec la référence
+% (les prédictions du test ont été écrites après chaque essai, dans le dossier predictions/)
 if ~isempty(bestNet) && bestFrug <= meilleureFrugaliteConnue
-    fprintf("Aucun nouvel essai ne bat la frugalité de référence (%.4f) : predictions_best.json non écrit.\n", ...
-        meilleureFrugaliteConnue);
-end
-if writePredictions && ~isempty(bestNet) && bestFrug > meilleureFrugaliteConnue
-    imdsTest = imageDatastore(testDir);
-    YTest = scores2label(minibatchpredict(bestNet, makeDS(imdsTest, bestCfg, false, false)), classNames);
-    fid = fopen(fullfile(outDir, "predictions_best.json"), "w");
-    fprintf(fid, "{\n");
-    n = numel(imdsTest.Files);
-    for i = 1:n
-        [~, name] = fileparts(imdsTest.Files{i});
-        sep = ","; if i == n, sep = ""; end
-        fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(YTest(i))), sep);
-    end
-    fprintf(fid, "}\n");
-    fclose(fid);
-    fprintf("predictions_best.json écrit (modèle : %s)\n", bestCfg.name);
+    fprintf("Remarque : aucun essai ne bat la frugalité de référence (%.4f).\n", meilleureFrugaliteConnue);
+elseif ~isempty(bestNet)
+    fprintf("Nouvelle meilleure frugalité : %s (%.4f > %.4f)\n", bestCfg.name, bestFrug, meilleureFrugaliteConnue);
 end
 
 %% ===================== Fonctions locales =====================
@@ -350,4 +347,25 @@ xlabel(ax3, "Durée (min)"); grid(ax3, "on");
 title(ax3, "Temps d'entraînement");
 set([ax1 ax3], TickLabelInterpreter="none");
 drawnow;
+end
+
+function f = savePredictions(baseDir, tag, F1, frug, files, labels)
+% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
+% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+if isempty(baseDir), baseDir = pwd; end
+outDir = fullfile(baseDir, "predictions");
+if ~isfolder(outDir), mkdir(outDir); end
+stamp = string(datetime("now", Format="yyyyMMdd_HHmmss"));
+f = fullfile(outDir, sprintf("pred_%s_%s_F1-%.4f_frug-%.4f.json", stamp, tag, F1, frug));
+fid = fopen(f, "w");
+fprintf(fid, "{\n");
+n = numel(files);
+for i = 1:n
+    [~, name] = fileparts(files{i});
+    sep = ","; if i == n, sep = ""; end
+    fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(labels(i))), sep);
+end
+fprintf(fid, "}\n");
+fclose(fid);
+fprintf("Prédictions écrites : %s\n", f);
 end

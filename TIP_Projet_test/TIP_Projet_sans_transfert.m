@@ -160,10 +160,13 @@ nomsClasses     = cellstr(lower(string(predTest)));
 dico = containers.Map(nomsImages, nomsClasses);
 txtJson = jsonencode(dico, PrettyPrint=true);
 
-fid = fopen("predictions.json", "w");
+% Fichier JSON unique (jamais écrasé) dans le dossier predictions/
+predFile = predictionsPath(fileparts(mfilename('fullpath')), ...
+    sprintf("sansTransfert_%dpx", tailleImg(1)), f1Macro, frug);
+fid = fopen(predFile, "w");
 fwrite(fid, txtJson, "char");
 fclose(fid);
-fprintf("\npredictions.json généré (%d images).\n", numel(nomsImages));
+fprintf("\nPrédictions écrites (%d images) : %s\n", numel(nomsImages), predFile);
 
 %% ============================ FONCTIONS LOCALES ==========================
 function couches = blocSeparable(nbFiltres, nom)
@@ -177,4 +180,13 @@ function couches = blocSeparable(nbFiltres, nom)
         batchNormalizationLayer(Name=nom+"_pw_bn")
         reluLayer(Name=nom+"_pw_relu")
     ];
+end
+
+function f = predictionsPath(baseDir, tag, F1, frug)
+% Chemin d'un fichier JSON unique : predictions/pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+if isempty(baseDir), baseDir = pwd; end
+outDir = fullfile(baseDir, "predictions");
+if ~isfolder(outDir), mkdir(outDir); end
+stamp = string(datetime("now", Format="yyyyMMdd_HHmmss"));
+f = fullfile(outDir, sprintf("pred_%s_%s_F1-%.4f_frug-%.4f.json", stamp, tag, F1, frug));
 end

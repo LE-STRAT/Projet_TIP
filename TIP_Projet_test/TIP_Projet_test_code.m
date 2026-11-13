@@ -4,8 +4,9 @@
 clear; clc;
 
 %% 1. Données : adapter le chemin vers le dossier dézippé
-trainDir = "C:\Users\HP\Desktop\INSA\Cours Master 1\COURS S1\Traitement d'images et Paroles\TIP_Projet_test\food-11\train";
-testDir  = "C:\Users\HP\Desktop\INSA\Cours Master 1\COURS S1\Traitement d'images et Paroles\TIP_Projet_test\food-11\test";
+baseDir  = fileparts(mfilename('fullpath')); if isempty(baseDir), baseDir = pwd; end
+trainDir = fullfile(baseDir, "food-11", "train");   % chemins relatifs : marche sur Mac et Windows
+testDir  = fullfile(baseDir, "food-11", "test");
 
 imds = imageDatastore(trainDir, IncludeSubfolders=true, LabelSource="foldernames");
 [imdsTrain, imdsVal] = splitEachLabel(imds, 0.8, "randomized");
@@ -54,13 +55,26 @@ imdsTest = imageDatastore(testDir);
 augTest  = augmentedImageDatastore(inputSize(1:2), imdsTest, ColorPreprocessing="gray2rgb");
 YTest    = scores2label(minibatchpredict(net, augTest), classNames);
 
-fid = fopen("predictions.json", "w");
+savePredictions(baseDir, sprintf("base_%s_%dpx", netName, inputSize(1)), F1, frug, imdsTest.Files, YTest);
+
+%% Fonction locale
+function f = savePredictions(baseDir, tag, F1, frug, files, labels)
+% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
+% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+if isempty(baseDir), baseDir = pwd; end
+outDir = fullfile(baseDir, "predictions");
+if ~isfolder(outDir), mkdir(outDir); end
+stamp = string(datetime("now", Format="yyyyMMdd_HHmmss"));
+f = fullfile(outDir, sprintf("pred_%s_%s_F1-%.4f_frug-%.4f.json", stamp, tag, F1, frug));
+fid = fopen(f, "w");
 fprintf(fid, "{\n");
-n = numel(imdsTest.Files);
+n = numel(files);
 for i = 1:n
-    [~, name] = fileparts(imdsTest.Files{i});
+    [~, name] = fileparts(files{i});
     sep = ","; if i == n, sep = ""; end
-    fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(YTest(i))), sep);
+    fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(labels(i))), sep);
 end
 fprintf(fid, "}\n");
 fclose(fid);
+fprintf("Prédictions écrites : %s\n", f);
+end

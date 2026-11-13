@@ -7,7 +7,7 @@
 %   - Adam, learning rate 3e-4 divisé par 10 à mi-parcours, 10 epochs, batch de 64
 % Prérequis : Deep Learning Toolbox + "Deep Learning Toolbox Model for ResNet-18 Network".
 % GPU fortement conseillé (Parallel Computing Toolbox + GPU NVIDIA) : sur CPU, compter plusieurs heures.
-% Utilisation : Run (F5). Le script entraîne, évalue, puis écrit predictions.json.
+% Utilisation : Run (F5). Le script entraîne, évalue, puis écrit un JSON unique dans le dossier predictions/.
 clear; clc; close all;
 
 %% 0. Réglages (ceux de l'essai gagnant : ne pas modifier pour reproduire le résultat)
@@ -77,24 +77,14 @@ figure(Name="Matrice de confusion (validation)"); confusionchart(YTrue, YPred);
 % Sauvegarde du modèle entraîné
 save(fullfile(baseDir, "modele_final.mat"), "net", "classNames", "inputSize", "-v7.3");
 
-%% 5. Prédictions sur le test -> predictions.json (format {"nom_image": "classe"})
+%% 5. Prédictions sur le test -> fichier JSON unique dans predictions/ (format {"nom_image": "classe"})
 imdsTest = imageDatastore(testDir);
 testImgs = transform(imdsTest, @(x) {padResize(x, inputSize, false)});
 YTest = scores2label(minibatchpredict(net, testImgs), classNames);
 
-fid = fopen(fullfile(baseDir, "predictions.json"), "w");
-fprintf(fid, "{\n");
-n = numel(imdsTest.Files);
-for i = 1:n
-    [~, name] = fileparts(imdsTest.Files{i});
-    sep = ","; if i == n, sep = ""; end
-    fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(YTest(i))), sep);
-end
-fprintf(fid, "}\n");
-fclose(fid);
-fprintf("predictions.json écrit (%d images de test)\n", n);
+savePredictions(baseDir, "final_res18_224_lb_aug", F1, frug, imdsTest.Files, YTest);
 
-%% Fonction locale
+%% Fonctions locales
 function out = padResize(img, sz, doAug)
 % Letterbox : réduit l'image en gardant ses proportions, puis la centre sur un carré noir.
 % doAug = true : miroir horizontal (1 fois sur 2) et rotation aléatoire de -15° à +15°.
@@ -110,4 +100,25 @@ out = zeros(sz, sz, 3, "single");
 r  = floor((sz - size(img,1))/2) + 1;
 cc = floor((sz - size(img,2))/2) + 1;
 out(r:r+size(img,1)-1, cc:cc+size(img,2)-1, :) = single(img);
+end
+
+function f = savePredictions(baseDir, tag, F1, frug, files, labels)
+% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
+% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+if isempty(baseDir), baseDir = pwd; end
+outDir = fullfile(baseDir, "predictions");
+if ~isfolder(outDir), mkdir(outDir); end
+stamp = string(datetime("now", Format="yyyyMMdd_HHmmss"));
+f = fullfile(outDir, sprintf("pred_%s_%s_F1-%.4f_frug-%.4f.json", stamp, tag, F1, frug));
+fid = fopen(f, "w");
+fprintf(fid, "{\n");
+n = numel(files);
+for i = 1:n
+    [~, name] = fileparts(files{i});
+    sep = ","; if i == n, sep = ""; end
+    fprintf(fid, '    "%s": "%s"%s\n', name, lower(string(labels(i))), sep);
+end
+fprintf(fid, "}\n");
+fclose(fid);
+fprintf("Prédictions écrites : %s\n", f);
 end
