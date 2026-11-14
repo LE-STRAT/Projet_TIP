@@ -8,9 +8,9 @@ rng(42);                                    % reproductibilité
 %% ---------------------------- 1. PARAMÈTRES ------------------------------
 dossierTrain = "food-11/train";                     % 11 sous-dossiers = 11 classes
 dossierTest  = "food-11/test";                      % images sans labels
-tailleImg    = [96 96 3];                   % essayer [128 128 3] si besoin
-canaux       = [16 32 64 128 256 256];      % largeur des blocs (levier de frugalité)
-nbEpoques    = 40;
+tailleImg    = [128 128 3];                   % essayer [128 128 3] si besoin, anciennement [96 96 3]
+canaux       = [24 48 96 160 256 256];      % largeur des blocs (levier de frugalité) anciennement [16 32 64 128 256]
+nbEpoques    = 60;
 tailleBatch  = 64;
 lrInitial    = 2e-3;
 
