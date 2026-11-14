@@ -1,16 +1,10 @@
-%% TIP Food-11 : modèle final (meilleure configuration du banc d'essai)
-% Configuration gagnante du banc d'essai (run GPU du 07/11, essai "res18_224_lb_aug") :
-%   F1 macro = 0,907 | frugalité = 0,631 | environ 10 min sur GPU
-%   - réseau : ResNet-18 pré-entraîné (ImageNet), dernière couche remplacée (11 classes)
-%   - images : 224x224, letterbox (image entière, sans déformation, bandes noires)
-%   - augmentation : miroir horizontal + rotation aléatoire de -15° à +15° (entraînement seulement)
-%   - Adam, learning rate 3e-4 divisé par 10 à mi-parcours, 10 epochs, batch de 64
-% Prérequis : Deep Learning Toolbox + "Deep Learning Toolbox Model for ResNet-18 Network".
-% GPU fortement conseillé (Parallel Computing Toolbox + GPU NVIDIA) : sur CPU, compter plusieurs heures.
-% Utilisation : Run (F5). Le script entraîne, évalue, puis écrit un JSON unique dans le dossier predictions/.
+%% Food-11 : modèle final (ResNet-18 pré-entraîné, réentraînement complet)
+% Images 224x224 en letterbox, augmentation (miroir, rotation de -15 à +15 degrés),
+% Adam avec un learning rate de 3e-4 divisé par 10 à mi-parcours, 10 epochs, batch de 64.
+% Nécessite la Deep Learning Toolbox, le package ResNet-18 et l'Image Processing Toolbox. GPU conseillé.
 clear; clc; close all;
 
-%% 0. Réglages (ceux de l'essai gagnant : ne pas modifier pour reproduire le résultat)
+%% 0. Réglages
 baseDir = fileparts(mfilename('fullpath'));
 if isempty(baseDir), baseDir = pwd; end
 trainDir = fullfile(baseDir, "food-11", "train");
@@ -28,7 +22,7 @@ else
     warning("Aucun GPU détecté : entraînement sur CPU, compter plusieurs heures.");
 end
 
-%% 1. Données : 80 % entraînement / 20 % validation (même découpage que le banc d'essai)
+%% 1. Données : 80 % entraînement / 20 % validation, même découpage que le banc d'essai
 imds = imageDatastore(trainDir, IncludeSubfolders=true, LabelSource="foldernames");
 classNames = categories(imds.Labels);
 numClasses = numel(classNames);
@@ -37,11 +31,11 @@ rng(0);
 fprintf("%d images d'entraînement, %d de validation, %d classes\n", ...
     numel(imdsTrain.Files), numel(imdsVal.Files), numClasses);
 
-% Letterbox + augmentation à l'entraînement ; letterbox seul pour la validation et le test
+% Augmentation sur l'entraînement uniquement
 trainDS = combine(transform(imdsTrain, @(x) {padResize(x, inputSize, true)}),  arrayDatastore(imdsTrain.Labels));
 valDS   = combine(transform(imdsVal,   @(x) {padResize(x, inputSize, false)}), arrayDatastore(imdsVal.Labels));
 
-%% 2. Réseau pré-entraîné, dernière couche remplacée (11 classes)
+%% 2. Réseau pré-entraîné, dernière couche remplacée par 11 sorties
 net = imagePretrainedNetwork(netName, NumClasses=numClasses);
 nParams = sum(cellfun(@numel, net.Learnables.Value));
 fprintf("Paramètres : %.2f M\n", nParams/1e6);
@@ -56,10 +50,10 @@ opts = trainingOptions("adam", ...
     Metrics="accuracy", Plots="training-progress", Verbose=true, VerboseFrequency=100, ...
     ExecutionEnvironment="auto");
 tStart = tic;
-net = trainnet(trainDS, net, "crossentropy", opts);
+[net, info] = trainnet(trainDS, net, "crossentropy", opts);
 fprintf("Entraînement terminé en %.1f min\n", toc(tStart)/60);
 
-%% 4. Évaluation sur la validation : F1 macro, exactitude, frugalité
+%% 4. Évaluation sur la validation
 valImgs = transform(imdsVal, @(x) {padResize(x, inputSize, false)});
 YPred = scores2label(minibatchpredict(net, valImgs), classNames);
 YTrue = imdsVal.Labels;
@@ -72,12 +66,15 @@ R    = nParams/1e6;
 frug = F1 - 0.3/(1 + 1/R);
 fprintf("F1 macro = %.4f | Exactitude = %.2f %% | Frugalité = %.4f\n", ...
     F1, 100*mean(YPred == YTrue), frug);
-figure(Name="Matrice de confusion (validation)"); confusionchart(YTrue, YPred);
 
-% Sauvegarde du modèle entraîné
+% Figures 10a et 10b du rapport
+figDir = fullfile(baseDir, "figures_rapport");
+saveCurves(info, fullfile(figDir, "Fig10a_courbes_final.png"));
+saveConfusion(YTrue, YPred, fullfile(figDir, "Fig10b_confusion_final.png"));
+
 save(fullfile(baseDir, "modele_final.mat"), "net", "classNames", "inputSize", "-v7.3");
 
-%% 5. Prédictions sur le test -> fichier JSON unique dans predictions/ (format {"nom_image": "classe"})
+%% 5. Prédictions sur le test, au format {"nom_image": "classe"}
 imdsTest = imageDatastore(testDir);
 testImgs = transform(imdsTest, @(x) {padResize(x, inputSize, false)});
 YTest = scores2label(minibatchpredict(net, testImgs), classNames);
@@ -86,8 +83,8 @@ savePredictions(baseDir, "final_res18_224_lb_aug", F1, frug, imdsTest.Files, YTe
 
 %% Fonctions locales
 function out = padResize(img, sz, doAug)
-% Letterbox : réduit l'image en gardant ses proportions, puis la centre sur un carré noir.
-% doAug = true : miroir horizontal (1 fois sur 2) et rotation aléatoire de -15° à +15°.
+% Letterbox : réduit l'image sans la déformer et la centre sur un carré noir.
+% doAug : miroir horizontal une fois sur deux et rotation aléatoire de -15 à +15 degrés.
 if size(img,3) == 1, img = repmat(img, [1 1 3]); end
 if size(img,3) > 3, img = img(:,:,1:3); end
 if doAug
@@ -103,8 +100,7 @@ out(r:r+size(img,1)-1, cc:cc+size(img,2)-1, :) = single(img);
 end
 
 function f = savePredictions(baseDir, tag, F1, frug, files, labels)
-% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
-% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+% Écrit les prédictions dans predictions/, sous un nom unique (date, configuration, scores).
 if isempty(baseDir), baseDir = pwd; end
 outDir = fullfile(baseDir, "predictions");
 if ~isfolder(outDir), mkdir(outDir); end
@@ -121,4 +117,43 @@ end
 fprintf(fid, "}\n");
 fclose(fid);
 fprintf("Prédictions écrites : %s\n", f);
+end
+
+function saveCurves(info, fichier)
+% Courbes de perte et d'exactitude (entraînement et validation), au format des figures du rapport.
+try
+    if ~isfolder(fileparts(fichier)), mkdir(fileparts(fichier)); end
+    T = info.TrainingHistory;
+    V = info.ValidationHistory;  V = V(V.Iteration > 0, :);
+    fig = figure(Color="w", Units="centimeters", Position=[2 2 16 11]);
+    tiledlayout(fig, 2, 1, TileSpacing="compact", Padding="compact");
+    motifs = ["loss" "accuracy"];  titres = ["Perte" "Exactitude (%)"];
+    for k = 1:2
+        ax = nexttile;  hold(ax, "on");  grid(ax, "on");
+        cT = find(contains(lower(string(T.Properties.VariableNames)), motifs(k)), 1);
+        cV = find(contains(lower(string(V.Properties.VariableNames)), motifs(k)), 1);
+        if ~isempty(cT), plot(ax, T.Iteration, smoothdata(T{:, cT}, "movmean", 25), Color=[0 0.447 0.741], LineWidth=1.2); end
+        if ~isempty(cV), plot(ax, V.Iteration, V{:, cV}, "-o", Color=[0.851 0.325 0.098], LineWidth=1.2, MarkerSize=4); end
+        ylabel(ax, titres(k));  set(ax, FontName="Times New Roman", FontSize=11);
+    end
+    xlabel(ax, "Itération");
+    legend(ax, ["Entraînement" "Validation"], Location="best");
+    exportgraphics(fig, fichier, Resolution=300);
+catch err
+    warning("Courbes non enregistrées : %s", err.message);
+end
+end
+
+function saveConfusion(yVrai, yPredit, fichier)
+% Matrice de confusion avec le rappel par classe, au format des figures du rapport.
+try
+    if ~isfolder(fileparts(fichier)), mkdir(fileparts(fichier)); end
+    fig = figure(Color="w", Units="centimeters", Position=[2 2 16 12]);
+    cm = confusionchart(fig, yVrai, yPredit, RowSummary="row-normalized");
+    cm.Title = "";  cm.XLabel = "Classe prédite";  cm.YLabel = "Classe réelle";
+    cm.FontName = "Times New Roman";  cm.FontSize = 10;
+    exportgraphics(fig, fichier, Resolution=300);
+catch err
+    warning("Matrice de confusion non enregistrée : %s", err.message);
+end
 end

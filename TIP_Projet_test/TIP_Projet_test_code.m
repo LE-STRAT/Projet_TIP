@@ -1,11 +1,10 @@
-%% Food-11 : script de départ (transfert d'apprentissage, Matlab R2024a+)
-% Prérequis : Deep Learning Toolbox + le support package du réseau choisi
-% (ex. "Deep Learning Toolbox Model for MobileNet-v2 Network", via Add-Ons).
+%% Food-11 : script de départ (ResNet-18 pré-entraîné, 128 px), référence de la partie 2
+% Nécessite la Deep Learning Toolbox et le support package du réseau choisi.
 clear; clc;
 
-%% 1. Données : adapter le chemin vers le dossier dézippé
+%% 1. Données
 baseDir  = fileparts(mfilename('fullpath')); if isempty(baseDir), baseDir = pwd; end
-trainDir = fullfile(baseDir, "food-11", "train");   % chemins relatifs : marche sur Mac et Windows
+trainDir = fullfile(baseDir, "food-11", "train");
 testDir  = fullfile(baseDir, "food-11", "test");
 
 imds = imageDatastore(trainDir, IncludeSubfolders=true, LabelSource="foldernames");
@@ -14,22 +13,19 @@ classNames = categories(imds.Labels);
 numClasses = numel(classNames);
 
 %% 2. Réseau pré-entraîné : on remplace la dernière couche (11 classes)
-% Candidats légers : "squeezenet", "mobilenetv2", "shufflenet", "resnet18"
 netName = "resnet18";
 net = imagePretrainedNetwork(netName, NumClasses=numClasses);
-inputSize = [128 128 3];   % ex. [224 224 3]
+inputSize = [128 128 3];
 
-% Nombre de paramètres (sert au score de frugalité)
+% Nombre de paramètres, pour le score de frugalité
 nParams = sum(cellfun(@numel, net.Learnables.Value));
 fprintf("Paramètres : %.2f M\n", nParams/1e6);
 
-% Redimensionnement seul (pas d'augmentation pour la version de base)
-% Pour tester l'augmentation plus tard, ajouter dans augmentedImageDatastore :
-%   DataAugmentation=imageDataAugmenter(RandXReflection=true, RandRotation=[-15 15])
+% Redimensionnement seul, sans augmentation
 augTrain = augmentedImageDatastore(inputSize(1:2), imdsTrain, ColorPreprocessing="gray2rgb");
 augVal   = augmentedImageDatastore(inputSize(1:2), imdsVal, ColorPreprocessing="gray2rgb");
 
-%% 3. Entraînement (à faire varier : learning rate, epochs, batch size...)
+%% 3. Entraînement
 opts = trainingOptions("adam", ...
     InitialLearnRate=1e-3, MiniBatchSize=64, MaxEpochs=5, ...
     Shuffle="every-epoch", ValidationData=augVal, ValidationFrequency=300, ...
@@ -48,9 +44,9 @@ F1   = mean(f1, "omitnan");
 R    = nParams/1e6;
 frug = F1 - 0.3/(1 + 1/R);
 fprintf("F1 macro = %.4f | Frugalité = %.4f\n", F1, frug);
-figure; confusionchart(YTrue, YPred);   % pour l'analyse dans le rapport
+figure; confusionchart(YTrue, YPred);
 
-%% 5. Prédictions sur le test + JSON (à lancer seulement avec le meilleur modèle)
+%% 5. Prédictions sur le test
 imdsTest = imageDatastore(testDir);
 augTest  = augmentedImageDatastore(inputSize(1:2), imdsTest, ColorPreprocessing="gray2rgb");
 YTest    = scores2label(minibatchpredict(net, augTest), classNames);
@@ -59,8 +55,7 @@ savePredictions(baseDir, sprintf("base_%s_%dpx", netName, inputSize(1)), F1, fru
 
 %% Fonction locale
 function f = savePredictions(baseDir, tag, F1, frug, files, labels)
-% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
-% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+% Écrit les prédictions dans predictions/, sous un nom unique (date, configuration, scores).
 if isempty(baseDir), baseDir = pwd; end
 outDir = fullfile(baseDir, "predictions");
 if ~isfolder(outDir), mkdir(outDir); end

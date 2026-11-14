@@ -1,14 +1,11 @@
-%% TIP Food-11 : gel des couches (frozen) vs fine-tuning, avec ResNet-18
-% Compare plusieurs stratégies, du réseau entièrement gelé au réseau entièrement réentraîné.
-% Tout le reste est identique au modèle final (224 px, letterbox, augmentation,
-% Adam 3e-4 divisé par 10 à mi-parcours, 10 epochs, batch 64), pour que seul le gel change.
+%% Food-11 : gel des couches ou réentraînement complet (ResNet-18)
+% Compare six stratégies, du réseau entièrement gelé au réseau entièrement réentraîné.
+% Le reste est identique au modèle final, pour que seul le gel change.
 %
-% Structure de ResNet-18 (du début à la fin) :
-%   conv1 -> bloc res2 -> bloc res3 -> bloc res4 -> bloc res5 (= res5a + res5b) -> couche finale (fc, 11 classes)
-%   Le bloc res5 contient à lui seul environ 75 % des paramètres du réseau.
+% ResNet-18 : conv1 -> res2 -> res3 -> res4 -> res5 (res5a + res5b) -> couche finale.
+% Le bloc res5 contient environ 75 % des paramètres.
 %
-% Prérequis : Deep Learning Toolbox, package ResNet-18, Image Processing Toolbox. GPU très conseillé
-% (environ 1 h pour les 6 essais sur GPU ; sur CPU, plusieurs heures PAR essai).
+% Nécessite la Deep Learning Toolbox, le package ResNet-18 et l'Image Processing Toolbox. GPU conseillé.
 clear; clc; close all;
 
 %% 0. Réglages
@@ -20,14 +17,10 @@ outDir   = fullfile(baseDir, "resultats_gel_" + string(datetime("now", Format="y
 mkdir(outDir);
 
 netName = "resnet18"; inputSize = 224; maxEpochs = 10; batchSize = 64;
-maxMinutes = 240;                    % plus aucun nouvel essai n'est lancé après ce temps total
+maxMinutes = 240;                    % budget total en minutes
 
-% Stratégies testées. trainFrom = à partir d'où on réentraîne (tout ce qui est avant est gelé)
-%   "tete"  : seule la nouvelle couche finale est entraînée (réseau entièrement gelé)
-%   "res5b" : dernier sous-bloc + couche finale
-%   "res5"  : dernier bloc + couche finale
-%   "res4"  : deux derniers blocs + couche finale
-%   "tout"  : fine-tuning complet (= le modèle final actuel, pour comparer dans les mêmes conditions)
+% trainFrom : point à partir duquel on réentraîne ; tout ce qui précède est gelé.
+%   "tete" = couche finale seule, puis "res5b", "res5", "res4", et "tout" = réseau entier
 V = struct("nom",{}, "trainFrom",{}, "lr",{});
 V(end+1) = struct("nom","1_gel_total",         "trainFrom","tete",  "lr",3e-4);
 V(end+1) = struct("nom","2_gel_total_lr1e-3",  "trainFrom","tete",  "lr",1e-3); % une couche neuve seule supporte un LR plus fort
@@ -89,7 +82,7 @@ for k = 1:numel(V)
         YPred = scores2label(minibatchpredict(net, valImgs), classNames);
         YTrue = imdsVal.Labels;
         F1 = macroF1(YTrue, YPred);
-        R = nTotal/1e6;                  % la frugalité compte TOUS les paramètres, gelés ou non
+        R = nTotal/1e6;                  % la frugalité compte tous les paramètres, gelés ou non
         row.paramsTotalM = R; row.paramsEntrainesM = nTrain/1e6; row.partEntrainee = nTrain/nTotal;
         row.F1 = F1; row.exactitude = mean(YPred == YTrue); row.frugalite = F1 - 0.3/(1 + 1/R);
         row.statut = "ok";
@@ -122,9 +115,9 @@ if ~isempty(bestNet)
     fprintf("Meilleure stratégie : %s (F1 = %.4f). Un JSON par stratégie est dans le dossier predictions/.\n", bestName, bestF1);
 end
 
-%% ===================== Fonctions locales =====================
+%% Fonctions locales
 function [net, nTrain] = freezeBefore(net, trainFrom)
-% Gèle (learning rate x 0) toutes les couches situées avant le point "trainFrom".
+% Gèle (facteur de learning rate à 0) les couches situées avant trainFrom.
 seuils = struct("tete",99, "res5b",51, "res5",50, "res4",40, "tout",0);
 T = seuils.(char(trainFrom));
 L = net.Learnables;
@@ -196,8 +189,7 @@ out(r:r+size(img,1)-1, cc:cc+size(img,2)-1, :) = single(img);
 end
 
 function f = savePredictions(baseDir, tag, F1, frug, files, labels)
-% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
-% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+% Écrit les prédictions dans predictions/, sous un nom unique (date, configuration, scores).
 if isempty(baseDir), baseDir = pwd; end
 outDir = fullfile(baseDir, "predictions");
 if ~isfolder(outDir), mkdir(outDir); end

@@ -1,8 +1,6 @@
-%% TIP Food-11 : banc d'essai automatique (lance tous les entraînements d'un coup)
-% Utilisation : ouvrir ce fichier, régler la section 0 si besoin, puis Run (F5).
-% Chaque essai est entraîné, évalué (F1 macro, frugalité), puis ajouté à
-% resultats.csv. Si un essai échoue (ex. support package manquant), il est
-% noté dans le tableau et le script passe au suivant.
+%% Food-11 : banc d'essai (enchaîne les configurations et compare F1, frugalité, durée)
+% Chaque essai est entraîné, évalué sur la validation, puis ajouté à resultats.csv.
+% Un essai qui échoue (package manquant, par exemple) est noté et le script continue.
 clear; clc; close all;
 
 %% 0. Réglages généraux
@@ -13,60 +11,53 @@ testDir  = fullfile(baseDir, "food-11", "test");
 outDir   = fullfile(baseDir, "resultats_" + string(datetime("now", Format="yyyyMMdd_HHmm")));
 mkdir(outDir);
 
-hasGPU = canUseGPU;                  % true si GPU NVIDIA + Parallel Computing Toolbox
-tiersToRun = [1 2];                  % 1 = simple, 2 = intermédiaire, 3 = élaboré, 4 = optimisation par étapes (GPU)
-if hasGPU, tiersToRun = 4; end       % sur GPU : uniquement l'optimisation par étapes (palier 4)
-maxMinutes    = 240;                 % plus aucun nouvel essai n'est lancé après ce temps total
+hasGPU = canUseGPU;
+tiersToRun = [1 2];                  % paliers lancés sans GPU
+if hasGPU, tiersToRun = 4; end       % avec GPU : optimisation par étapes
+maxMinutes    = 240;                 % budget total en minutes
 
-% Essais déjà réussis lors d'une exécution précédente : ils sont sautés.
-% Pour tout relancer depuis zéro, remplacer par : essaisDejaFaits = strings(0);
-% (run GPU du 07/11 : resnet18 224 px letterbox+augmentation -> F1 0,907 | frugalité 0,631)
+% Essais déjà faits, sautés à la relance (strings(0) pour tout relancer)
 essaisDejaFaits = ["sqz_96" "sqz_128" "res18_96" "res18_128_base" "res18_128_letterbox" ...
                    "res18_128_aug" "res18_128_lr3e-4" "res18_224_lb_aug"];
-meilleureFrugaliteConnue = 0.6311;   % référence affichée à la fin pour comparaison
-trainFraction = 1.0;                 % ex. 0.3 pour tester le script vite sur 30 % des images
-writePredictions = true;             % écrit un JSON unique par essai dans le dossier predictions/
+meilleureFrugaliteConnue = 0.6311;   % meilleure frugalité obtenue jusque-là
+trainFraction = 1.0;                 % < 1 pour un test rapide sur une partie des images
+writePredictions = true;             % un JSON par essai dans predictions/
 
 fprintf("GPU détecté : %d | paliers : %s | sortie : %s\n", hasGPU, mat2str(tiersToRun), outDir);
 
-%% 1. Liste des essais : du plus simple au plus élaboré
-% addExp(E, palier, nom, réseau, taille, epochs, batch, lr, augmentation, letterbox, lrSchedule, options)
-%   options : seed=2 (graine), bestVal=true (garde la meilleure epoch), copyBest=true (reprend la meilleure recette)
-%   letterbox = true : image entière conservée (bandes noires), sans déformation
-%   letterbox = false: image étirée en carré (comme le script d'origine)
+%% 1. Liste des essais
+% addExp(E, palier, nom, réseau, taille, epochs, batch, lr, augmentation, letterbox, palier de LR, options)
+%   options : seed, bestVal (garde la meilleure epoch), copyBest (reprend la meilleure recette de B/C)
 E = [];
-% --- Palier 1 : rapide, réseaux légers ---
+% Palier 1 : réseaux légers, petites images
 E = addExp(E,1,"sqz_96",       "squeezenet",  96,  3, 64, 1e-3, false, false, false);
 E = addExp(E,1,"sqz_128",      "squeezenet",  128, 3, 64, 1e-3, false, false, false);
 E = addExp(E,1,"mobv2_128",    "mobilenetv2", 128, 3, 64, 1e-3, false, false, false);
 E = addExp(E,1,"res18_96",     "resnet18",    96,  3, 64, 1e-3, false, false, false);
-% --- Palier 2 : on teste letterbox, augmentation, learning rate ---
+% Palier 2 : un seul réglage change par rapport à res18_128_base
 E = addExp(E,2,"res18_128_base",      "resnet18", 128, 3, 64, 1e-3, false, false, false);
 E = addExp(E,2,"res18_128_letterbox", "resnet18", 128, 3, 64, 1e-3, false, true,  false);
 E = addExp(E,2,"res18_128_aug",       "resnet18", 128, 3, 64, 1e-3, true,  false, false);
 E = addExp(E,2,"res18_128_lr3e-4",    "resnet18", 128, 3, 64, 3e-4, false, false, true);
 E = addExp(E,2,"sqz_128_lr3e-4",      "squeezenet", 128, 3, 64, 3e-4, false, false, true);  % squeezenet était instable avec lr 1e-3
-% --- Palier 3 : élaboré (déjà fait sur GPU le 07/11, gardé pour mémoire) ---
+% Palier 3 : première configuration complète en 224 px
 E = addExp(E,3,"res18_224_lb_aug",    "resnet18", 224, 10, 64, 3e-4, true, true, true);
 
-% --- Palier 4 : optimisation par étapes, du plus important au moins important ---
-% Les valeurs NaN sont choisies AUTOMATIQUEMENT à partir des étapes précédentes.
-% Étape A : learning rate (resnet18, 224 px, sans augmentation ni letterbox, 6 epochs)
+% Palier 4 : optimisation par étapes. Les NaN sont remplis à partir des étapes précédentes.
+% A : learning rate (224 px, 6 epochs, sans augmentation ni letterbox)
 E = addExp(E,4,"A_lr1e-4", "resnet18", 224, 6, 64, 1e-4, false, false, true);
 E = addExp(E,4,"A_lr3e-4", "resnet18", 224, 6, 64, 3e-4, false, false, true);
 E = addExp(E,4,"A_lr1e-3", "resnet18", 224, 6, 64, 1e-3, false, false, true);
-% Étape B : entraînement long avec le meilleur LR de A -> on lit sur la courbe de
-% validation l'epoch où le réseau est au meilleur (on garde ce réseau-là)
+% B : entraînement long avec le meilleur LR de A, pour repérer la meilleure epoch
 E = addExp(E,4,"B_long_20ep", "resnet18", 224, 20, 64, NaN, false, false, true, bestVal=true);
-% Étape C : régularisation et entrée, avec LR et epochs fixés par A et B
-%   (epochs = meilleure epoch de B + 5 de marge, et on garde la meilleure epoch)
+% C : augmentation et letterbox, avec le LR de A et (meilleure epoch de B + 5) epochs
 E = addExp(E,4,"C_aug",    "resnet18", 224, NaN, 64, NaN, true,  false, true, bestVal=true);
 E = addExp(E,4,"C_lb",     "resnet18", 224, NaN, 64, NaN, false, true,  true, bestVal=true);
 E = addExp(E,4,"C_lb_aug", "resnet18", 224, NaN, 64, NaN, true,  true,  true, bestVal=true);
-% Étape D : la meilleure recette de B/C refaite avec une autre graine (le gain est-il fiable ?)
+% D : meilleure recette de B/C avec une autre graine
 E = addExp(E,4,"D_meilleur_graine2", "resnet18", 224, NaN, 64, NaN, false, false, true, ...
     bestVal=true, copyBest=true, seed=2);
-% Étape E : autres réseaux, entraînés avec la meilleure recette trouvée (comparaison équitable)
+% E : autres réseaux avec cette même recette
 E = addExp(E,4,"E_effb0",  "efficientnetb0", 224, NaN, 64, NaN, false, false, true, bestVal=true, copyBest=true);
 E = addExp(E,4,"E_mobv2",  "mobilenetv2",    224, NaN, 64, NaN, false, false, true, bestVal=true, copyBest=true);
 E = addExp(E,4,"E_sqz",    "squeezenet",     224, NaN, 64, NaN, false, false, true, bestVal=true, copyBest=true);
@@ -133,7 +124,7 @@ for k = 1:numel(E)
         "minutes",NaN, "statut","");
     try
         tRun = tic;
-        rng(c.seed);                     % graine propre à chaque essai (reproductible)
+        rng(c.seed);                     % graine propre à chaque essai
         [net, nParams] = buildNet(c.netName, numClasses);
         trainDS = makeDS(imdsTrain, c, true,  true);
         valDS   = makeDS(imdsVal,   c, false, true);
@@ -230,14 +221,13 @@ end
 fprintf("Temps total : %.1f min | fichiers dans %s\n", toc(tStart)/60, outDir);
 
 %% 5. Comparaison avec la référence
-% (les prédictions du test ont été écrites après chaque essai, dans le dossier predictions/)
 if ~isempty(bestNet) && bestFrug <= meilleureFrugaliteConnue
     fprintf("Remarque : aucun essai ne bat la frugalité de référence (%.4f).\n", meilleureFrugaliteConnue);
 elseif ~isempty(bestNet)
     fprintf("Nouvelle meilleure frugalité : %s (%.4f > %.4f)\n", bestCfg.name, bestFrug, meilleureFrugaliteConnue);
 end
 
-%% ===================== Fonctions locales =====================
+%% Fonctions locales
 function E = addExp(E, tier, name, netName, sz, epochs, batch, lr, aug, letterbox, sched, opt)
 arguments
     E; tier; name; netName; sz; epochs; batch; lr; aug; letterbox; sched
@@ -350,8 +340,7 @@ drawnow;
 end
 
 function f = savePredictions(baseDir, tag, F1, frug, files, labels)
-% Écrit les prédictions du test dans un fichier JSON UNIQUE (jamais écrasé),
-% dans le dossier "predictions" : pred_<date_heure>_<configuration>_F1-<F1>_frug-<frugalité>.json
+% Écrit les prédictions dans predictions/, sous un nom unique (date, configuration, scores).
 if isempty(baseDir), baseDir = pwd; end
 outDir = fullfile(baseDir, "predictions");
 if ~isfolder(outDir), mkdir(outDir); end
